@@ -322,7 +322,7 @@ namespace Pchp.Library
             //
             try
             {
-                return Encrypt(data, key, cipherMethod, iv, options);
+                return Encrypt(ctx, data, key, cipherMethod, iv, options);
             }
             catch (CryptographicException ex)
             {
@@ -331,7 +331,7 @@ namespace Pchp.Library
             }
         }
 
-        private static PhpString Encrypt(string data, byte[] key, Cipher cipher, byte[] iv, Options options)
+        private static PhpString Encrypt(Context ctx, string data, byte[] key, Cipher cipher, byte[] iv, Options options)
         {
             var aesAlg = PrepareCipher(key, cipher, iv, options);
             ICryptoTransform encryptor = aesAlg.CreateEncryptor(aesAlg.Key, aesAlg.IV);
@@ -339,7 +339,7 @@ namespace Pchp.Library
             using MemoryStream msEncrypt = new MemoryStream();
             using CryptoStream csEncrypt = new CryptoStream(msEncrypt, encryptor, CryptoStreamMode.Write);
 
-            using (var swEncrypt = new StreamWriter(csEncrypt))
+            using (var swEncrypt = new StreamWriter(csEncrypt, ctx.StringEncoding))
             {
                 swEncrypt.Write(data);
             }
