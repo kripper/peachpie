@@ -276,7 +276,7 @@ namespace Pchp.Library
 
             using MemoryStream msDecrypt = new MemoryStream(encryptedBytes);
             using CryptoStream csDecrypt = new CryptoStream(msDecrypt, decryptor, CryptoStreamMode.Read);
-            using StreamReader srDecrypt = new StreamReader(csDecrypt, ctx.StringEncoding);
+            using StreamReader srDecrypt = new StreamReader(csDecrypt);
 
             return srDecrypt.ReadToEnd();
         }
@@ -322,7 +322,7 @@ namespace Pchp.Library
             //
             try
             {
-                return Encrypt(ctx, data, key, cipherMethod, iv, options);
+                return Encrypt(data, key, cipherMethod, iv, options);
             }
             catch (CryptographicException ex)
             {
