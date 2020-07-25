@@ -638,11 +638,11 @@ namespace Peachpie.Library.XmlDom
         /// <param name="options">PHP options.</param>
         /// <param name="isHtml">Whether the <paramref name="xmlString"/> represents XML generated from HTML document (then it may contain some invalid XML characters).</param>
         /// <returns></returns>
-        private bool loadXMLInternal(Context ctx, string xmlString, int options, bool isHtml)
+        private bool loadXMLInternal(Context ctx, PhpString xmlString, int options, bool isHtml)
         {
             this._isHtmlDocument = isHtml;
 
-            var stream = new StringReader(xmlString);
+            var stream = new MemoryStream(xmlString.ToBytes(ctx));
 
             try
             {
