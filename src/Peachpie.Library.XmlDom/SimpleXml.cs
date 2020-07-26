@@ -470,10 +470,10 @@ namespace Peachpie.Library.XmlDom
         /// <param name="dataIsUrl">Whether data points to URL. Default is false.</param>
         /// <param name="ns">Namespace prefix or URI.</param>
         /// <param name="is_prefix">TRUE if ns is a prefix, FALSE if it's a URI; defaults to FALSE.</param>
-        public SimpleXMLElement(Context ctx, string data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false)
+        public SimpleXMLElement(Context ctx, PhpString data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false)
             : this(ctx)
         {
-            __construct(data, options, dataIsUrl, ns, is_prefix);
+            __construct(ctx, data, options, dataIsUrl, ns, is_prefix);
         }
 
         internal SimpleXMLElement(Context ctx, XmlElement xmlElement, IterationType iterationType, IterationNamespace/*!*/iterationNamespace)
@@ -507,7 +507,7 @@ namespace Peachpie.Library.XmlDom
             this.XmlAttribute = xmlAttribute;
         }
 
-        public void __construct(string data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false)
+        public void __construct(Context ctx, PhpString data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false)
         {
             var doc = PhpXmlDocument.Create();
 
@@ -515,14 +515,17 @@ namespace Peachpie.Library.XmlDom
             {
                 if (dataIsUrl)
                 {
-                    using (var stream = PhpStream.Open(_ctx, data, StreamOpenMode.ReadText))
+                    using (var stream = PhpStream.Open(_ctx, data.ToString(ctx.StringEncoding), StreamOpenMode.ReadText))
                     {
                         if (stream != null) doc.Load(stream.RawStream);
                     }
                 }
                 else
                 {
-                    doc.LoadXml(data);
+                    // TODO: Merge code with DomDocument::loadXMLInternal()
+                    XmlReaderSettings settings = new XmlReaderSettings() { DtdProcessing = DtdProcessing.Parse };
+                    var stream = new MemoryStream(data.ToBytes(ctx));
+                    doc.Load(XmlReader.Create(stream, settings));
                 }
             }
             catch (XmlException e)
