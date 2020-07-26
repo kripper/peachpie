@@ -60,7 +60,14 @@ namespace Peachpie.Library.XmlDom
                 }
             }
 
-            return SimpleXMLElement.Create(ctx, className, doc.DocumentElement);
+            if (TryResolveType(ctx, className, out var type))
+            {
+                return SimpleXMLElement.Create(ctx, type, doc.DocumentElement);
+            }
+            else
+            {
+                return null; // false
+            }
         }
 
         #endregion
@@ -97,7 +104,14 @@ namespace Peachpie.Library.XmlDom
                 return null;
             }
 
-            return SimpleXMLElement.Create(ctx, className, doc.DocumentElement);
+            if (TryResolveType(ctx, className, out var type))
+            {
+                return SimpleXMLElement.Create(ctx, type, doc.DocumentElement);
+            }
+            else
+            {
+                return null; // false
+            }
         }
 
         #endregion
@@ -133,25 +147,65 @@ namespace Peachpie.Library.XmlDom
             switch (xml_node.NodeType)
             {
                 case XmlNodeType.Document:
+                    xml_node = ((XmlDocument)xml_node).DocumentElement;
+                    if (xml_node != null)
                     {
-                        xml_node = ((XmlDocument)xml_node).DocumentElement;
-                        if (xml_node != null) goto case XmlNodeType.Element; else goto default;
+                        goto case XmlNodeType.Element;
+                    }
+                    else
+                    {
+                        goto default;
                     }
 
                 case XmlNodeType.Element:
+                    if (TryResolveType(ctx, className, out var type))
                     {
-                        return SimpleXMLElement.Create(ctx, className, (XmlElement)xml_node);
+                        return SimpleXMLElement.Create(ctx, type, (XmlElement)xml_node);
+                    }
+                    else
+                    {
+                        return null; // false
                     }
 
                 default:
-                    {
-                        PhpException.Throw(PhpError.Warning, Resources.SimpleXmlInvalidNodeToImport);
-                        return null;
-                    }
+                    PhpException.Throw(PhpError.Warning, Resources.SimpleXmlInvalidNodeToImport);
+                    return null; // false
             }
         }
 
         #endregion
+
+        /// <summary>
+        /// Resolves SimpleXMLElement type, or outputs a warning.
+        /// </summary>
+        private static bool TryResolveType(Context ctx, string className, out PhpTypeInfo type)
+        {
+            if (className == null || className.Equals(nameof(SimpleXMLElement), StringComparison.OrdinalIgnoreCase))
+            {
+                type = PhpTypeInfoExtension.GetPhpTypeInfo<SimpleXMLElement>();
+                return true;
+            }
+
+            // try to resolve the className
+            type = ctx.ResolveType(className, default, true);
+
+            if (type == null)
+            {
+                // TODO: err
+                return false;
+            }
+
+            if (type.Type.IsSubclassOf(typeof(SimpleXMLElement)))
+            {
+                return true;
+            }
+            else
+            {
+                // we will not allow className which is not derived from SimpleXMLElement
+                PhpException.Throw(PhpError.Warning, Resources.SimpleXmlInvalidClassName, type.Name);
+                return false;
+            }
+        }
     }
 
     /// <summary>
@@ -309,10 +363,15 @@ namespace Peachpie.Library.XmlDom
         readonly protected Context _ctx;
 
         /// <summary>
-        /// Name of a class, which will be used when initializing children. Class which extends SimpleXmlElement HAS to be used. 
-        /// Non-null value means, that this instance of<see cref="SimpleXMLElement"/> was initialized with specified className.
+        /// A class, which will be used when initializing children. Class which extends SimpleXmlElement HAS to be used. 
+        /// Non-null value means, that this instance of <see cref="SimpleXMLElement"/> was initialized with specified class.
         /// </summary>
-        private string className;
+        private protected PhpTypeInfo _class; // the property is not visible in PHP context
+
+        /// <summary>
+        /// Whether the class name represents SimpleXMLElement type.
+        /// </summary>
+        private protected static bool IsSimpleXMLElement(PhpTypeInfo @class) => @class == null || @class.Type == typeof(SimpleXMLElement);
 
         /// <summary>
         /// Non-<B>null</B> except for construction (between ctor and <see cref="__construct(string,int,bool)"/>
@@ -398,7 +457,9 @@ namespace Peachpie.Library.XmlDom
         [PhpFieldsOnlyCtor]
         protected SimpleXMLElement(Context ctx)
             : this(ctx, null, IterationType.ChildElements, IterationNamespace.CreateWithPrefix(string.Empty, null))
-        { }
+        {
+            _class = this.GetPhpTypeInfo();
+        }
 
         /// <summary>
         /// Public constructor. Constructs the inner <see cref="XmlElement"/> with <paramref name="data"/>.
@@ -407,10 +468,12 @@ namespace Peachpie.Library.XmlDom
         /// <param name="data">Xml data.</param>
         /// <param name="options">Options.</param>
         /// <param name="dataIsUrl">Whether data points to URL. Default is false.</param>
-        public SimpleXMLElement(Context ctx, string data, int options = 0, bool dataIsUrl = false)
+        /// <param name="ns">Namespace prefix or URI.</param>
+        /// <param name="is_prefix">TRUE if ns is a prefix, FALSE if it's a URI; defaults to FALSE.</param>
+        public SimpleXMLElement(Context ctx, string data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false)
             : this(ctx)
         {
-            __construct(data, options, dataIsUrl);
+            __construct(data, options, dataIsUrl, ns, is_prefix);
         }
 
         internal SimpleXMLElement(Context ctx, XmlElement xmlElement, IterationType iterationType, IterationNamespace/*!*/iterationNamespace)
@@ -444,7 +507,7 @@ namespace Peachpie.Library.XmlDom
             this.XmlAttribute = xmlAttribute;
         }
 
-        public void __construct(string data, int options = 0, bool dataIsUrl = false)
+        public void __construct(string data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false)
         {
             var doc = PhpXmlDocument.Create();
 
@@ -473,33 +536,35 @@ namespace Peachpie.Library.XmlDom
             }
 
             this.XmlElement = doc.DocumentElement;
+
+            iterationNamespace = is_prefix ? IterationNamespace.CreateWithPrefix(ns, XmlElement) : IterationNamespace.CreateWithNamespace(ns);
         }
 
         /// <summary>
         /// Creates a new <see cref="SimpleXMLElement"/> or a derived class.
         /// </summary>
         /// <param name="ctx">Runtime context.</param>
-        /// <param name="className">The name of the class to create or <B>null</B>.</param>
+        /// <param name="type">The name of the class to create or <B>null</B>.</param>
         /// <returns>A new <see cref="SimpleXMLElement"/> or a derived class.</returns>
-        internal static SimpleXMLElement Create(Context ctx, string className)
+        internal static SimpleXMLElement Create(Context ctx, PhpTypeInfo type)
         {
-            if (className == null || className.Equals(nameof(SimpleXMLElement), StringComparison.OrdinalIgnoreCase))
+            if (IsSimpleXMLElement(type))
             {
                 return new SimpleXMLElement(ctx);
             }
 
-            // try to resolve the className
-            var type = ctx.ResolveType(className, default(RuntimeTypeHandle), true);
-            if (type == null)
-            {
-                // TODO: err
-                return null;
-            }
+            //// try to resolve the className
+            //var type = ctx.ResolveType(type, default, true);
+            //if (type == null)
+            //{
+            //    // TODO: err
+            //    return null;
+            //}
 
             // we will not allow className which is not derived from SimpleXMLElement
             if (!type.Type.IsSubclassOf(typeof(SimpleXMLElement)))
             {
-                PhpException.Throw(PhpError.Warning, Resources.SimpleXmlInvalidClassName, className);
+                PhpException.Throw(PhpError.Warning, Resources.SimpleXmlInvalidClassName, type.Name);
                 return null;
             }
 
@@ -513,8 +578,6 @@ namespace Peachpie.Library.XmlDom
             //    args: new object[] { ctx },
             //    culture: System.Globalization.CultureInfo.InvariantCulture);
 
-            instance.className = className;
-
             return instance;
         }
 
@@ -522,20 +585,20 @@ namespace Peachpie.Library.XmlDom
         /// Creates a new <see cref="SimpleXMLElement"/> or a derived class.
         /// </summary>
         /// <param name="ctx">Runtime context.</param>
-        /// <param name="className">The name of the class to create or <B>null</B>.</param>
+        /// <param name="type">The name of the class to create or <B>null</B>.</param>
         /// <param name="xmlElement">The <see cref="XmlElement"/> to wrap.</param>
         /// <param name="iterationType">Iteration behavior of new instance.</param>
         /// <param name="iterationNamespace">The namespace URI of the elements/attributes that should be iterated and dumped.</param>
         /// <returns>A new <see cref="SimpleXMLElement"/> or a derived class.</returns>
-        internal static SimpleXMLElement Create(Context ctx, string className, XmlElement/*!*/ xmlElement, IterationType iterationType, IterationNamespace/*!*/iterationNamespace)
+        internal static SimpleXMLElement Create(Context ctx, PhpTypeInfo type, XmlElement/*!*/ xmlElement, IterationType iterationType, IterationNamespace/*!*/iterationNamespace)
         {
-            if (className == null)
+            if (IsSimpleXMLElement(type))
             {
                 return new SimpleXMLElement(ctx, xmlElement, iterationType, iterationNamespace);
             }
             else
             {
-                var instance = Create(ctx, className);
+                var instance = Create(ctx, type);
                 instance.XmlElement = xmlElement;
                 instance.iterationType = iterationType;
                 instance.iterationNamespace = iterationNamespace;
@@ -548,22 +611,24 @@ namespace Peachpie.Library.XmlDom
         /// Creates a new <see cref="SimpleXMLElement"/> or a derived class.
         /// </summary>
         /// <param name="ctx">Runtime context.</param>
-        /// <param name="className">The name of the class to create or <B>null</B>.</param>
+        /// <param name="type">The name of the class to create or <B>null</B>.</param>
         /// <param name="xmlElement">The <see cref="XmlElement"/> to wrap.</param>
         /// <param name="iterationType">Iteration behavior of new instance.</param>
         /// <returns>A new <see cref="SimpleXMLElement"/> or a derived class.</returns>
-        internal static SimpleXMLElement Create(Context ctx, string className, XmlElement/*!*/ xmlElement, IterationType iterationType)
+        internal static SimpleXMLElement Create(Context ctx, PhpTypeInfo type, XmlElement/*!*/ xmlElement, IterationType iterationType)
         {
-            if (className == null)
+            if (IsSimpleXMLElement(type))
             {
                 return new SimpleXMLElement(ctx, xmlElement, iterationType);
             }
+            else
+            {
+                var instance = Create(ctx, type);
+                instance.XmlElement = xmlElement;
+                instance.iterationType = iterationType;
 
-            var instance = Create(ctx, className);
-            instance.XmlElement = xmlElement;
-            instance.iterationType = iterationType;
-
-            return instance;
+                return instance;
+            }
         }
 
         /// <summary>
@@ -571,17 +636,17 @@ namespace Peachpie.Library.XmlDom
         /// </summary>
         /// <param name="ctx">Runtime context.</param>
         /// <param name="xmlElement">The <see cref="XmlElement"/> to wrap.</param>
-        /// <param name="className">The name of the class to create or <B>null</B>.</param>
+        /// <param name="type">The name of the class to create or <B>null</B>.</param>
         /// <returns>A new <see cref="SimpleXMLElement"/> or a derived class.</returns>
-        internal static SimpleXMLElement Create(Context ctx, string className, XmlElement/*!*/ xmlElement)
+        internal static SimpleXMLElement Create(Context ctx, PhpTypeInfo type, XmlElement/*!*/ xmlElement)
         {
-            if (className == null)
+            if (IsSimpleXMLElement(type))
             {
                 return new SimpleXMLElement(ctx, xmlElement);
             }
             else
             {
-                var instance = Create(ctx, className);
+                var instance = Create(ctx, type);
                 instance.XmlElement = xmlElement;
                 instance.iterationNamespace = IterationNamespace.CreateWithPrefix(string.Empty, null);
 
@@ -593,40 +658,50 @@ namespace Peachpie.Library.XmlDom
         /// Creates a new <see cref="SimpleXMLElement"/> or a derived class.
         /// </summary>
         /// <param name="ctx">Runtime context.</param>
-        /// <param name="className">The name of the class to create or <B>null</B>.</param>
+        /// <param name="type">The name of the class to create or <B>null</B>.</param>
         /// <param name="xmlAttribute">The <see cref="XmlElement"/> to wrap.</param>
         /// <param name="iterationNamespace">The namespace URI of the elements/attributes that should be iterated and dumped.</param>
         /// <returns>A new <see cref="SimpleXMLElement"/> or a derived class.</returns>
-        internal static SimpleXMLElement Create(Context ctx, string className, XmlAttribute/*!*/ xmlAttribute, IterationNamespace/*!*/iterationNamespace)
+        internal static SimpleXMLElement Create(Context ctx, PhpTypeInfo type, XmlAttribute/*!*/ xmlAttribute, IterationNamespace/*!*/iterationNamespace)
         {
-            if (className == null) return new SimpleXMLElement(ctx, xmlAttribute, iterationNamespace);
+            if (IsSimpleXMLElement(type))
+            {
+                return new SimpleXMLElement(ctx, xmlAttribute, iterationNamespace);
+            }
+            else
+            {
+                var instance = Create(ctx, type);
+                instance.XmlElement = xmlAttribute.OwnerElement;
+                instance.iterationType = IterationType.Attribute;
+                instance.iterationNamespace = iterationNamespace;
+                instance.XmlAttribute = xmlAttribute;
 
-            var instance = Create(ctx, className);
-            instance.XmlElement = xmlAttribute.OwnerElement;
-            instance.iterationType = IterationType.Attribute;
-            instance.iterationNamespace = iterationNamespace;
-            instance.XmlAttribute = xmlAttribute;
-
-            return instance;
+                return instance;
+            }
         }
 
         /// <summary>
         /// Creates a new <see cref="SimpleXMLElement"/> or a derived class.
         /// </summary>
         /// <param name="ctx">Runtime context.</param>
-        /// <param name="className">The name of the class to create or <B>null</B>.</param>
+        /// <param name="type">The name of the class to create or <B>null</B>.</param>
         /// <param name="xmlAttribute">The <see cref="XmlElement"/> to wrap.</param>
         /// <returns>A new <see cref="SimpleXMLElement"/> or a derived class.</returns>
-        internal static SimpleXMLElement Create(Context ctx, string className, XmlAttribute/*!*/ xmlAttribute)
+        internal static SimpleXMLElement Create(Context ctx, PhpTypeInfo type, XmlAttribute/*!*/ xmlAttribute)
         {
-            if (className == null) return new SimpleXMLElement(ctx, xmlAttribute);
+            if (IsSimpleXMLElement(type))
+            {
+                return new SimpleXMLElement(ctx, xmlAttribute);
+            }
+            else
+            {
+                var instance = Create(ctx, type);
+                instance.XmlElement = xmlAttribute.OwnerElement;
+                instance.iterationType = IterationType.Attribute;
+                instance.XmlAttribute = xmlAttribute;
 
-            var instance = Create(ctx, className);
-            instance.XmlElement = xmlAttribute.OwnerElement;
-            instance.iterationType = IterationType.Attribute;
-            instance.XmlAttribute = xmlAttribute;
-
-            return instance;
+                return instance;
+            }
         }
 
         #endregion
@@ -830,11 +905,11 @@ namespace Peachpie.Library.XmlDom
             SimpleXMLElement clone;
             if (iterationType == IterationType.Attribute)
             {
-                clone = Create(_ctx, className, XmlAttribute, iterationNamespace);
+                clone = Create(_ctx, _class, XmlAttribute, iterationNamespace);
             }
             else
             {
-                clone = Create(_ctx, className, XmlElement, iterationType, iterationNamespace);
+                clone = Create(_ctx, _class, XmlElement, iterationType, iterationNamespace);
             }
 
             if (intermediateElements != null) clone.intermediateElements = new List<string>(intermediateElements);
@@ -868,11 +943,11 @@ namespace Peachpie.Library.XmlDom
 
             if (child != null)
             {
-                elem = Create(_ctx, className, child, IterationType.Element, iterationNamespace /*operating on the current namespace $element->children('namespace ...')->link*/);
+                elem = Create(_ctx, _class, child, IterationType.Element, iterationNamespace /*operating on the current namespace $element->children('namespace ...')->link*/);
             }
             else
             {
-                elem = Create(_ctx, className, XmlElement, IterationType.None);
+                elem = Create(_ctx, _class, XmlElement, IterationType.None);
 
                 if (intermediateElements != null)
                 {
@@ -1049,7 +1124,7 @@ namespace Peachpie.Library.XmlDom
                 return (PhpValue)NodeValue;
 
             // otherwise
-            return PhpValue.FromClass(Create(_ctx, className, (XmlElement)child));
+            return PhpValue.FromClass(Create(_ctx, _class, (XmlElement)child));
         }
 
         /// <summary>
@@ -1214,12 +1289,12 @@ namespace Peachpie.Library.XmlDom
                     {
                         case XmlNodeType.Element:
                             {
-                                result.Add(Create(_ctx, className, (XmlElement)node));
+                                result.Add(Create(_ctx, _class, (XmlElement)node));
                                 break;
                             }
                         case XmlNodeType.Attribute:
                             {
-                                result.Add(Create(_ctx, className, (XmlAttribute)node));
+                                result.Add(Create(_ctx, _class, (XmlAttribute)node));
                                 break;
                             }
 
@@ -1228,7 +1303,7 @@ namespace Peachpie.Library.XmlDom
                         case XmlNodeType.Text:
                         case XmlNodeType.Whitespace:
                             {
-                                result.Add(Create(_ctx, className, (XmlElement)node.ParentNode));
+                                result.Add(Create(_ctx, _class, (XmlElement)node.ParentNode));
                                 break;
                             }
                     }
@@ -1276,7 +1351,7 @@ namespace Peachpie.Library.XmlDom
 				ns = XmlElement.GetNamespaceOfPrefix(ns);
 			}*/
 
-            return Create(_ctx, className, XmlElement, IterationType.AttributeList, (ns == null) ? iterationNamespace : (isPrefix ? IterationNamespace.CreateWithPrefix(ns, XmlElement) : IterationNamespace.CreateWithNamespace(ns)));
+            return Create(_ctx, _class, XmlElement, IterationType.AttributeList, (ns == null) ? iterationNamespace : (isPrefix ? IterationNamespace.CreateWithPrefix(ns, XmlElement) : IterationNamespace.CreateWithNamespace(ns)));
         }
 
         /// <summary>
@@ -1296,7 +1371,7 @@ namespace Peachpie.Library.XmlDom
                 ns = XmlElement.GetNamespaceOfPrefix(ns);
             }*/
 
-            return Create(_ctx, className, XmlElement, IterationType.ChildElements, (ns == null) ? iterationNamespace : (isPrefix ? IterationNamespace.CreateWithPrefix(ns, XmlElement) : IterationNamespace.CreateWithNamespace(ns)));
+            return Create(_ctx, _class, XmlElement, IterationType.ChildElements, (ns == null) ? iterationNamespace : (isPrefix ? IterationNamespace.CreateWithPrefix(ns, XmlElement) : IterationNamespace.CreateWithNamespace(ns)));
         }
 
         /// <summary>
@@ -1352,7 +1427,7 @@ namespace Peachpie.Library.XmlDom
                 return null;
             }
 
-            return Create(_ctx, className, child);
+            return Create(_ctx, _class, child);
         }
 
         /// <summary>
@@ -1365,8 +1440,9 @@ namespace Peachpie.Library.XmlDom
         {
             try
             {
-                if (namespaceUri == null) namespaceUri = iterationNamespace.namespaceUri;// this.namespaceUri;
-                XmlAttribute attr = XmlElement.OwnerDocument.CreateAttribute(qualifiedName, namespaceUri);
+                var attr = namespaceUri == null
+                   ? XmlElement.OwnerDocument.CreateAttribute(qualifiedName)
+                   : XmlElement.OwnerDocument.CreateAttribute(qualifiedName, namespaceUri);
 
                 attr.Value = value;
 
@@ -1385,7 +1461,7 @@ namespace Peachpie.Library.XmlDom
         /// <summary>
         /// Wraps a node or returns its inner text if it is an element containing nothing but text.
         /// </summary>
-        private static PhpValue GetChildElementValue(Context ctx, string className, XmlElement xmlElement)
+        private static PhpValue GetChildElementValue(Context ctx, PhpTypeInfo type, XmlElement xmlElement)
         {
             // determine whether all children are text-like and concat them
             StringBuilder text = null;
@@ -1398,10 +1474,13 @@ namespace Peachpie.Library.XmlDom
                     if (text == null) text = new StringBuilder(child_text);
                     else text.Append(child_text);
                 }
-                else return PhpValue.FromClass(Create(ctx, className, xmlElement));
+                else
+                {
+                    return PhpValue.FromClass(Create(ctx, type, xmlElement));
+                }
             }
 
-            return (text == null ? PhpValue.FromClass(Create(ctx, className, xmlElement)) : PhpValue.Create(text.ToString()));
+            return (text == null ? PhpValue.FromClass(Create(ctx, type, xmlElement)) : PhpValue.Create(text.ToString()));
         }
 
         /// <summary>
@@ -1546,7 +1625,7 @@ namespace Peachpie.Library.XmlDom
                             {
                                 yield return (
                                     (PhpValue)sibling.LocalName,
-                                    PhpValue.FromClass(Create(_ctx, className, (XmlElement)sibling, IterationType.ChildElements, iterationNamespace /* preserve namespaceUri */)));
+                                    PhpValue.FromClass(Create(_ctx, _class, (XmlElement)sibling, IterationType.ChildElements, iterationNamespace /* preserve namespaceUri */)));
                             }
                         }
                         break;
@@ -1559,7 +1638,7 @@ namespace Peachpie.Library.XmlDom
                         {
                             if (child.NodeType == XmlNodeType.Element && iterationNamespace.IsIn(child) /*child.NamespaceURI == namespaceUri*/)
                             {
-                                yield return ((PhpValue)child.LocalName, PhpValue.FromClass(Create(_ctx, className, (XmlElement)child)));
+                                yield return ((PhpValue)child.LocalName, PhpValue.FromClass(Create(_ctx, _class, (XmlElement)child)));
                             }
                             /*object childElement = GetPhpChildElement(child);
                             if (childElement != null)
@@ -1577,7 +1656,7 @@ namespace Peachpie.Library.XmlDom
                         {
                             if (!attr.Name.Equals("xmlns", StringComparison.Ordinal) && iterationNamespace.IsIn(attr)/*attr.NamespaceURI == namespaceUri*/)
                             {
-                                yield return ((PhpValue)attr.LocalName, PhpValue.FromClass(Create(_ctx, className, attr)));
+                                yield return ((PhpValue)attr.LocalName, PhpValue.FromClass(Create(_ctx, _class, attr)));
                             }
                         }
                         break;
@@ -1614,7 +1693,7 @@ namespace Peachpie.Library.XmlDom
                                 // return the index-th attribute
                                 var attr = GetAttributeForIndex(key.Integer);
                                 return attr != null
-                                    ? PhpValue.FromClass(Create(_ctx, className, attr))
+                                    ? PhpValue.FromClass(Create(_ctx, _class, attr))
                                     : PhpValue.Null;
                             }
 
@@ -1624,7 +1703,7 @@ namespace Peachpie.Library.XmlDom
                                 // returning the index-th sibling of the same name
                                 var element = GetSiblingForIndex(key.Integer);
                                 return element != null
-                                    ? PhpValue.FromClass(Create(_ctx, className, element))
+                                    ? PhpValue.FromClass(Create(_ctx, _class, element))
                                     : PhpValue.Null;
                             }
                     }
@@ -1638,7 +1717,7 @@ namespace Peachpie.Library.XmlDom
                         // getting an attribute
                         var attr = iterationNamespace.GetAttributeIn(XmlElement.Attributes, key.String);// XmlElement.Attributes[key.String, namespaceUri];
                         return attr != null
-                            ? PhpValue.FromClass(Create(_ctx, className, attr, iterationNamespace))
+                            ? PhpValue.FromClass(Create(_ctx, _class, attr, iterationNamespace))
                             : PhpValue.Null;
                     }
                 }
@@ -1778,7 +1857,128 @@ namespace Peachpie.Library.XmlDom
         /// Count childs in the element.
         /// </summary>
         /// <returns></returns>
-        public long count() => this.Count();
+        public virtual long count() => this.Count();
+
+        #endregion
+    }
+
+    /// <summary>
+    /// The SimpleXMLIterator provides recursive iteration over all nodes of a <see cref="SimpleXMLElement"/> object.
+    /// </summary>
+    [PhpType(PhpTypeAttribute.InheritName)]
+    [PhpExtension("simplexml")]
+    public class SimpleXMLIterator
+        : SimpleXMLElement, Pchp.Library.Spl.RecursiveIterator
+    {
+        #region Fields
+
+        private SimpleXMLIterator _current = null;
+
+        #endregion
+
+        #region Construction
+
+        [PhpFieldsOnlyCtor]
+        protected SimpleXMLIterator(Context ctx) : base(ctx) { }
+        public SimpleXMLIterator(Context ctx, string data, int options = 0, bool dataIsUrl = false, string ns = "", bool is_prefix = false) : base(ctx, data, options, dataIsUrl, ns, is_prefix) { }
+        internal SimpleXMLIterator(Context ctx, XmlElement element) : base(ctx, element) { }
+
+        #endregion
+
+        #region RecursiveIterator
+
+        /// <summary>
+        /// Returns the current element.
+        /// </summary>
+        /// <returns>Returns a <see cref="SimpleXMLIterator"/> object or NULL on failure.</returns>
+        public virtual PhpValue current() => (_current == null) ? PhpValue.Null : PhpValue.FromClass(_current);
+
+        /// <summary>
+        /// Returns a <see cref="SimpleXMLIterator"/> object containing sub-elements of the current <see cref="SimpleXMLIterator"/> element.
+        /// </summary>
+        public virtual Pchp.Library.Spl.RecursiveIterator getChildren() => hasChildren() ? _current : null;
+
+        /// <summary>
+        /// Checks whether the current <see cref="SimpleXMLIterator"/> element has sub-elements (XmlElement).
+        /// </summary>
+        public virtual bool hasChildren()
+        {
+            if (_current != null && _current.XmlElement.HasChildNodes)
+            {
+                XmlNode next = _current.XmlElement.FirstChild;
+                while (next != null && !(next is XmlElement))
+                    next = next.NextSibling;
+
+                return next is XmlElement;
+            }
+            else
+                return false;
+        }
+
+        /// <summary>
+        /// Gets the XML tag name of the current element.
+        /// </summary>
+        /// <returns>Returns the XML tag name of the element referenced by the current <see cref="SimpleXMLIterator"/> object or FALSE.</returns>
+        public virtual PhpValue key() => (_current == null) ? PhpValue.False : _current.XmlElement.Name;
+
+        /// <summary>
+        /// Moves the <see cref="SimpleXMLIterator"/> to the next element.
+        /// </summary>
+        public virtual void next()
+        {
+            if (_current != null)
+            {
+                var next = _current.XmlElement.NextSibling;
+                while (next != null && !(next is XmlElement))
+                    next = next.NextSibling;
+
+                _current = (next is XmlElement element) ? GetIterator(element) : _current = null;
+            }
+        }
+
+        /// <summary>
+        /// Rewinds the <see cref="SimpleXMLIterator"/> to the first element.
+        /// </summary>
+        public virtual void rewind()
+        {
+            if (!XmlElement.HasChildNodes)
+            {
+                _current = null;
+            }
+            else
+            {
+                var firstChild = XmlElement.FirstChild; // Seeks the first XmlElement
+                while (firstChild != null && !(firstChild is XmlElement))
+                    firstChild = firstChild.NextSibling;
+
+                _current = (firstChild is XmlElement element) ? GetIterator(element) : _current = null;
+            }
+        }
+
+        /// <summary>
+        /// Gets <see cref="SimpleXMLIterator"/> or devided class.
+        /// </summary>
+        /// <param name="element">XmlElement of the class.</param>
+        /// <returns><see cref="SimpleXMLIterator"/> or devided class.</returns>
+        protected SimpleXMLIterator GetIterator(XmlElement element)
+        {
+            if (this is SimpleXMLIterator)
+            {
+                return new SimpleXMLIterator(_ctx, element);
+            }
+            else
+            {
+                SimpleXMLIterator res = (SimpleXMLIterator)(this.GetPhpTypeInfo().CreateUninitializedInstance(_ctx));
+                res.XmlElement = element;
+                return res;
+            }
+        }
+
+        /// <summary>
+        /// Checks if the current element is valid after calls to SimpleXMLIterator::rewind() or SimpleXMLIterator::next().
+        /// </summary>
+        /// <returns>Returns TRUE if the current element is valid, otherwise FALSE</returns>
+        public virtual bool valid() => _current != null;
 
         #endregion
     }
