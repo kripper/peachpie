@@ -36,6 +36,11 @@ namespace Pchp.Library
 
         #endregion
 
+        // TODO: Do directly from PHP
+        public static void peachpie_set_string_encoding(string str) {
+            Console.OutputEncoding = Encoding.GetEncoding(str);
+        }
+
         #region ord, chr, bin2hex, hex2bin
 
         /// <summary>
